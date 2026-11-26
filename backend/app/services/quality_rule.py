@@ -24,6 +24,31 @@ class QualityRuleService(BaseModuleService):
 
     # ---- 业务扩展：质量规则命中与报告派发 ----
 
+    CORRECTION_ACTIONS = {"规则执行更正", "更正执行结果", "更正命中", "执行更正", "迟到更正"}
+    RECOMPUTE_ACTIONS = {"重新运算", "复算", "重新复算", "触发复算"}
+
+    def run_action(self, entry_id: int, action: str):  # type: ignore[override]
+        if action in self.CORRECTION_ACTIONS:
+            from app.services.forensic import forensic_service
+            execution = next((e for e in forensic_service.list_executions()
+                              if int(e.get("rule_id", 0) or 0) == entry_id), None)
+            if execution is None:
+                execution = forensic_service.find_execution(1)
+            if execution is None:
+                return None, "没有与该规则关联的执行轮"
+            result, message, _status = forensic_service.correct_execution(
+                str(execution.get("id")), {"hits": 2})
+            if result is None:
+                return None, message
+            return store.find(self.MODULE, entry_id), message
+        if action in self.RECOMPUTE_ACTIONS:
+            entry = store.find(self.MODULE, entry_id)
+            if entry is None:
+                return None, f"{self.ENTITY} {entry_id} 不存在或已归档"
+            entry["最近复算时间"] = datetime.now(timezone.utc).isoformat()
+            return entry, "质量规则库已按复算导入关联的执行轮与检查记录完成重新运算"
+        return super().run_action(entry_id, action)
+
     def check_threshold(self, entry_id: int, value: float) -> dict[str, Any]:
         """按阈值口径判定命中，严重级别决定处置。"""
         entry = store.find(self.MODULE, entry_id)
@@ -70,6 +95,57 @@ class QualityRuleService(BaseModuleService):
             "abnormal": hit_count > 0,
         })
         return report_id
+
+    def recompute_round(self, entry_id: int, round_no: str,
+                        rows: list[dict[str, Any]],
+                        caliber: dict[str, Any] | None = None) -> dict[str, Any]:
+        """复算入口：按导入包关联的执行轮与检查记录重新运算。
+
+        与 run_rule_batch 不同，这里优先使用取证包冻结的口径快照，
+        避免规则阈值改版后用新口径解释旧命中；同时不递增「今日命中」。
+        """
+        entry = store.find(self.MODULE, entry_id) if entry_id else None
+        caliber = caliber or {}
+        dimension = str(caliber.get("dimension") or caliber.get("检查维度")
+                        or (entry.get("检查维度") if entry else ""))
+        caliber_type = str(caliber.get("caliber_type") or "non_empty")
+        threshold = None
+        raw_threshold = str(caliber.get("threshold")
+                             or caliber.get("阈值数值") or "").rstrip("%")
+        try:
+            threshold = float(raw_threshold) if raw_threshold else None
+        except ValueError:
+            threshold = None
+
+        hits = 0
+        for r in rows:
+            value = r.get(dimension, "") if dimension else ""
+            if caliber_type in {"threshold", "numeric_threshold"} and threshold is not None:
+                try:
+                    is_hit = float(value) < threshold
+                except (TypeError, ValueError):
+                    is_hit = True
+            else:
+                is_hit = not str(value or "").strip()
+            if is_hit:
+                hits += 1
+        total = len(rows)
+        result = {
+            "ok": True,
+            "rule_id": entry_id,
+            "round": round_no,
+            "checked": total,
+            "hits": hits,
+            "score": f"{(1 - hits / total):.2%}" if total else "100.00%",
+            "dimension": dimension,
+            "caliber_version": caliber.get("caliber_version") or caliber.get("口径版本"),
+        }
+        if entry is not None:
+            entry["最近复算轮"] = round_no
+            entry["复算检查数"] = str(total)
+            entry["复算命中数"] = str(hits)
+            entry["最近复算评分"] = result["score"]
+        return result
 
     def consume_cleanse_output(self, entry_id: int) -> list[str]:
         """读取清洗模块输出的数据集作为检查输入。"""

@@ -22,6 +22,12 @@ from app.services.dist_receipt import DistReceiptService
 from app.services.model_change import ModelChangeService
 from app.services.stats_overview import StatsOverviewService
 from app.services.ref_data_mgr import RefDataMgrService
+from app.services.forensic_modules import (
+    ForensicApplicationService,
+    ForensicRecordService,
+    QualityExecutionService,
+    RecheckBatchService,
+)
 
 SERVICES: dict[str, BaseModuleService] = {
     "source_system": SourceSystemService(),
@@ -44,6 +50,10 @@ SERVICES: dict[str, BaseModuleService] = {
     "model_change": ModelChangeService(),
     "stats_overview": StatsOverviewService(),
     "ref_data_mgr": RefDataMgrService(),
+    "forensic_application": ForensicApplicationService(),
+    "quality_execution": QualityExecutionService(),
+    "recheck_batch": RecheckBatchService(),
+    "forensic_record": ForensicRecordService(),
 }
 
 

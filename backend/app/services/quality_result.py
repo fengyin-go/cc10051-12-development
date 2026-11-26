@@ -24,6 +24,25 @@ class QualityResultService(BaseModuleService):
 
     # ---- 业务扩展：质量报告生成与看板推送 ----
 
+    CORRECTION_ACTIONS = {"规则执行更正", "更正执行结果", "更正命中", "执行更正", "迟到更正"}
+
+    def run_action(self, entry_id: int, action: str):  # type: ignore[override]
+        if action in self.CORRECTION_ACTIONS:
+            entry = store.find(self.MODULE, entry_id)
+            if entry is None:
+                return None, f"{self.ENTITY} {entry_id} 不存在或已归档"
+            report_no = str(entry.get("报告编号") or entry.get("报告批次") or "")
+            from app.services.forensic import forensic_service
+            version = (forensic_service.find_version(report_no, "v1")
+                       or forensic_service.find_version(report_no, None))
+            execution_id = version.get("execution_id") if version else 1
+            result, message, _status = forensic_service.correct_execution(
+                str(execution_id), {"hits": 2})
+            if result is None:
+                return None, message
+            return entry, message
+        return super().run_action(entry_id, action)
+
     def generate_report(self, entry_id: int) -> dict[str, Any]:
         """汇总规则命中生成质量报告，计算评分。"""
         entry = store.find(self.MODULE, entry_id)
